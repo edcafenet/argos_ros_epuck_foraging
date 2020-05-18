@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<argos-configuration>
+
+  <!-- FRAMEWORK -->
+
+ 
+  <!-- *************** -->
+  <!-- * Controllers * -->
+  <!-- *************** -->
+  <controllers>
+     <!-- Controller for the robots -->
+    <argos_ros_epuck_controller id="argos_ros_epuck" library="libargos_ros_epuck.so">
+      <actuators>
+        <epuck_wheels implementation="default" />
+        <epuck_base_leds implementation="default" medium="leds" />
+	<epuck_rgb_leds implementation="default" medium="leds" />
+	<epuck_range_and_bearing implementation="medium" medium="rab" data_size="2" range="0.7"/>
+      </actuators>
+      <sensors>
+	<positioning implementation="default"/>
+        <epuck_proximity implementation="default" show_rays="false" noise_level="0.05" calibrated="true"/>
+	<epuck_range_and_bearing implementation="medium" medium="rab"
+				 data_size="4"
+				 noise_std_deviation="1.5"
+				 loss_probability="0.85"
+				 calibrated="true"
+				 show_rays="false"/>
+	<epuck_ground implementation="rot_z_only" noise_level="0.1" calibrated="true"/>
+	<epuck_omnidirectional_camera implementation="rot_z_only"
+				      medium="leds" show_rays="true"/>
+      </sensors>
+      <params velocity="5" />
+    </argos_ros_epuck_controller>
+ </controllers>
+
+  <!-- LOOP FUNCTIONS -->
+
+
+  <!-- ******************* -->
+  <!-- * Physics engines * -->
+  <!-- ******************* -->
+  <physics_engines>
+    <dynamics2d id="dyn2d"/>
+  </physics_engines>
+
+  <!-- ********* -->
+  <!-- * Media * -->
+  <!-- ********* -->
+  <media>
+    <led id="leds" grid_size="1,1,1"/>
+    <range_and_bearing id="rab"/>
+  </media>
+
+  <!-- VIZ -->
+
+  <!-- ARENA -->
+
+
+  <!-- ROBOTS -->
+
+
+  <!-- PUCKS -->
+
+  </arena>
+
+</argos-configuration>

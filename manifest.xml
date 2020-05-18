@@ -1,0 +1,14 @@
+<package>
+  <description brief="argos_ros_epuck_foraging">
+
+     argos_ros_epuck_foraging
+
+  </description>
+  <author>Eddie</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/argos_ros_epuck_foraging</url>
+
+</package>
+
+
