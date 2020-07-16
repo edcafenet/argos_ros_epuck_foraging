@@ -5,22 +5,17 @@
 #include <argos3/core/utility/datatypes/byte_array.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_wheels_actuator.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_proximity_sensor.h>
-#include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_ground_sensor.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_omnidirectional_camera_sensor.h>
-#include <argos3/plugins/robots/generic/control_interface/ci_positioning_sensor.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_range_and_bearing_actuator.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_range_and_bearing_sensor.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_base_leds_actuator.h>
 #include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_rgb_leds_actuator.h>
+#include <argos3/plugins/robots/e-puck/control_interface/ci_epuck_battery_sensor.h>
 
 #include "RabBuffer.h"
 
-#include "argos_ros_epuck/Puck.h"
-#include "argos_ros_epuck/PuckList.h"
 #include "argos_ros_epuck/Proximity.h"
 #include "argos_ros_epuck/ProximityList.h"
-#include "argos_ros_epuck/GroundSensor.h"
-#include "argos_ros_epuck/GroundSensorPack.h"
 #include "argos_ros_epuck/Neighbor.h"
 #include "argos_ros_epuck/NeighborList.h"
 #include "argos_ros_epuck/Leaf.h"
@@ -33,6 +28,7 @@
 #include "std_msgs/Float32.h"
 #include "std_msgs/Bool.h"
 #include "std_msgs/String.h"
+#include "std_msgs/ColorRGBA.h"
 
 using namespace argos;
 
@@ -73,22 +69,22 @@ public:
    * completeness.
    */
   virtual void Destroy() {}
-  
+
   /*
    * The callback method for getting new commanded speed on the cmd_vel topic.
    */
   void cmdVelCallback(const geometry_msgs::Twist& twist);
 
   /*
-   * The callback method for turning on/off the base LEDs 
+   * The callback method for turning on/off the base LEDs
    */
   void BaseLEDsCallback(const std_msgs::Bool& msg);
 
   /*
-   * The callback method for switching the color of the RGB LEDs 
+   * The callback method for switching the color of the RGB LEDs
    */
-  void RGBLEDsCallback(const std_msgs::String& msg);
-    
+  void RGBLEDsCallback(const std_msgs::ColorRGBA& msg);
+
   /*
    * The callback method for getting the Completed Merkle Tree Object.
    */
@@ -121,19 +117,17 @@ private:
 
   CCI_EPuckWheelsActuator* m_pcWheels;
   CCI_EPuckProximitySensor* m_pcProximity;
-  CCI_EPuckOmnidirectionalCameraSensor* m_pcOmniCam;
-  CCI_PositioningSensor* m_pcPosition;
-  CCI_EPuckGroundSensor* m_pcGround;
   CCI_EPuckRangeAndBearingActuator* m_pcRABAct;
   CCI_EPuckRangeAndBearingSensor* m_pcRABSens;
   CCI_EPuckBaseLEDsActuator* m_pcBaseLEDs;
   CCI_EPuckRGBLEDsActuator* m_pcRGBLEDs;
+  CCI_EPuckBatterySensor* m_pcBatterySens;
 
   /*
    * Pointer to the range-and-bearing messages buffer.
    */
   RabBuffer m_pcRabMessageBuffer;
-  
+
   // The following constant values were copied from the argos source tree from
   // the file src/plugins/robots/foot-bot/simulator/footbot_entity.cpp
   static const Real HALF_BASELINE = 0.07f; // Half the distance between wheels
@@ -141,7 +135,7 @@ private:
 
   // This is the Robot ID as an integer, not as a string
   int RobotID;
-  
+
   /*
    * The following variables are used as parameters for the
    * algorithm. You can set their value in the <parameters> section
@@ -165,22 +159,16 @@ private:
   CColor CurrentRGBColor;
 
   // ROS
-  
-  // Postion publisher
-  ros::Publisher posePub;
-
-  // Ground publisher
-  ros::Publisher groundPub;
-  
-  // Puck list publisher
-  ros::Publisher puckListPub;
-
   // Proximity sensor publisher
   ros::Publisher proximityPub;
 
   // Neighbor list publisher
   ros::Publisher neighborListPub;
-  
+
+  // Battery level publisher and variable
+  ros::Publisher batteryPub;
+  std_msgs::Float32 battery_level;
+
   // Subscriber for cmd_vel (Twist message) topic.
   ros::Subscriber cmdVelSub;
 
@@ -189,7 +177,7 @@ private:
 
   // Subscriber for the base LEDs topic.
   ros::Subscriber RGBLEDsSub;
-  
+
   // Subscriber for Completed Merkle (MerkleLeafList) topic.
   ros::Subscriber CompletedMerkleSub;
 
@@ -197,8 +185,8 @@ private:
   // This list is a private list since it needs to be
   // accesible from the loop functions
   argos_ros_epuck::NeighborList neighborList;
-  
-  // List of Merkle Leafs  
+
+  // List of Merkle Leafs
   // This list is a private list since it needs to be
   // accesible from the loop functions
   argos_ros_epuck::MerkleLeafList completedMerkleList;
@@ -207,27 +195,11 @@ private:
    * Functions to get Sensor Readings
    */
 
-  /* Get readings from ground sensor */
-  argos_ros_epuck::GroundSensorPack GetGroundSensorReadings();
-  /* Get reading from position sensor */
-  geometry_msgs::Pose GetPositionSensorReadings();
-  /* Get Pucks around the robot */
-  argos_ros_epuck::PuckList GetPuckList();
   /* Get readings from proximity sensor */
   argos_ros_epuck::ProximityList GetProximityList();
   /* Publish Neighbor List */
   argos_ros_epuck::NeighborList GetNeighborList();
 
-  /*
-   * Function to prepare the messages and datagram to send to
-   * other robots
-   */
-  UInt8* PrepareMessageToSend();
-
-public:
-  // We need only a single ROS node, although there are individual publishers
-  // and subscribers for each instance of the class.
-  static ros::NodeHandle* nodeHandle;
 };
 
 #endif
