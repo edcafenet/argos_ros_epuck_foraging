@@ -4,11 +4,8 @@ import math, random
 import os
 
 # ARGOS MSGS
-from argos_ros_epuck_foraging.msg import Puck
-from argos_ros_epuck_foraging.msg import PuckList
 from argos_ros_epuck_foraging.msg import Proximity
 from argos_ros_epuck_foraging.msg import ProximityList
-from argos_ros_epuck_foraging.msg import GroundSensorPack
 from argos_ros_epuck_foraging.msg import Neighbor
 from argos_ros_epuck_foraging.msg import NeighborList
 from argos_ros_epuck_foraging.msg import Leaf
@@ -20,8 +17,8 @@ from geometry_msgs.msg import Pose, PoseStamped
 from actionlib_msgs.msg import GoalID
 from actionlib_msgs.msg import GoalStatusArray
 from diff_drive.msg import *
-from std_msgs.msg import Bool, Float32, String
-import message_filters 
+from std_msgs.msg import Bool, Float32, String, ColorRGBA
+import message_filters
 
 # CUSTOM CLASSES
 from merkle_tree import SwarmMerkleTree
@@ -34,11 +31,7 @@ class Controller:
     cmdRGBLedsPub = None
     cmdGoToPub = None
     merkleCompletedPub = None
-    
-    # Sensor Variables
-    GroundSensorPack = None
-    puckList = None
-    
+
     # Navigation Variables
     pose = None
     lastTwist = None
@@ -56,7 +49,7 @@ class Controller:
     # Puck-related variables
     alignmentThreshold = 0.02
     grabbingDistancePuckThreshold = 16
-    
+
     # Constants
     MAX_FORWARD_SPEED = 0.15
     MAX_ROTATION_SPEED = 0.30
@@ -70,18 +63,18 @@ class Controller:
     CurrentCell = Pose()
     cell_index = -1
     dimensionOfCell = 0.5
-    
+
     # Random Pose
     random_pose = Pose()
     random_pose.position.x =  round(random.uniform(1,2), 2)
     random_pose.position.y =  round(random.uniform(1,2), 2)
 
-    # Current Goal 
-    current_goal_info = None 
+    # Current Goal
+    current_goal_info = None
     current_goal_status = None
     current_goal_status_id = None
 
-    # Internal Merkle Tree 
+    # Internal Merkle Tree
     mk = None
     merkle_leafs = 0
 
@@ -93,39 +86,42 @@ class Controller:
         self.cmdGoToPub = rospy.Publisher('diff_drive_go_to_goal/go_to', PoseStamped, queue_size=1)
         self.cmdCancelGoalPub = rospy.Publisher('diff_drive_go_to_goal/cancel', GoalID, queue_size=1)
         self.merkleCompletedPub = rospy.Publisher('comm/merkle_completed', MerkleLeafList, queue_size=1)
-        
+
         # Subscribers
         rospy.Subscriber('position', Pose, self.pose_callback)
-        rospy.Subscriber('puck_list', PuckList, self.pucks_callback)
+        rospy.Subscriber('color_list', ColorRGBA, self.color_callback)
         rospy.Subscriber('proximity', ProximityList, self.prox_callback)
         rospy.Subscriber('diff_drive_go_to_goal/goal', GoToPoseActionGoal, self.current_goal_callback)
-        rospy.Subscriber('diff_drive_go_to_goal/status', GoalStatusArray, self.current_goal_status_callback)            
+        rospy.Subscriber('diff_drive_go_to_goal/status', GoalStatusArray, self.current_goal_status_callback)
         rospy.Subscriber('diff_drive_go_to_goal/goal_achieved', Bool, self.goal_achieved_callback)
-        rospy.Subscriber('ground', GroundSensorPack, self.ground_callback)
         rospy.Subscriber('comm/neighbor_list', NeighborList, self.neighbors_callback)
-        
-        # Connection to the internal merkle tree
-        self.merkle_leafs = int(os.environ['MERKLE_LEAFS'])
-        self.mk = SwarmMerkleTree(self.merkle_leafs)
-        
+
+        # Received Merkle Tree
+        received_merkle_tree = rospy.client.wait_for_message(rospy.get_namespace() + "comm/init_merkle_tree", String, timeout=None)
+        self.mk = SwarmMerkleTree(received_merkle_tree.data)
+
+        # Navigation variables
+        self.lastTwist = self.twistRandom()
+
     def neighbors_callback(self, NeighborList):
-        for neighbor in NeighborList.neighbors:
-            neighbor_topic_name = '/epuck_' + str(neighbor.ID) + '/comm/merkle_completed'
-            neighbor_merkle =  rospy.client.wait_for_message(neighbor_topic_name, MerkleLeafList)
-                
-            for leaf_index in xrange(neighbor_merkle.n):
-                if(neighbor_merkle.leafs[leaf_index].completed != self.mk.completed_merkle[leaf_index]['completed']):
-                    if(neighbor_merkle.leafs[leaf_index].completed == True):                        
+        if(NeighborList):
+            for neighbor in NeighborList.neighbors:
+                neighbor_topic_name = '/epuck_' + str(neighbor.ID) + '/comm/merkle_completed'
+                try:
+                    neighbor_merkle =  rospy.client.wait_for_message(neighbor_topic_name, MerkleLeafList, timeout=0.5)
+                    for leaf_index in xrange(neighbor_merkle.n):
+                        if(neighbor_merkle.leafs[leaf_index].completed != self.mk.completed_merkle[leaf_index]['completed']):
+                            if(neighbor_merkle.leafs[leaf_index].completed == True):
+                                if(self.mk.check(neighbor_merkle.leafs[leaf_index].hash_action, neighbor_merkle.leafs[leaf_index].hash_input, leaf_index)):
+                                    self.mk.completed_merkle[leaf_index]['completed'] = neighbor_merkle.leafs[leaf_index].completed
+                                    self.mk.completed_merkle[leaf_index]['hash_action'] = neighbor_merkle.leafs[leaf_index].hash_action
+                                    self.mk.completed_merkle[leaf_index]['hash_input'] = neighbor_merkle.leafs[leaf_index].hash_input
+                                    self.mk.completed_merkle[leaf_index]['received'] = True
+                                    self.mk.completed_merkle[leaf_index]['from_robot'] = neighbor.ID
 
-                        # If my neighbor has completed a leaf that I don't have
-                        if((self.CurrentRGBColor != None and self.mk.completed_merkle[leaf_index]['hash'] != '')):
-                            self.goToRandomPosition()
+                except rospy.ROSException as exc:
+                    pass
 
-                        self.mk.completed_merkle[leaf_index]['completed'] = neighbor_merkle.leafs[leaf_index].completed
-                        self.mk.completed_merkle[leaf_index]['hash'] = neighbor_merkle.leafs[leaf_index].hash
-                        self.mk.completed_merkle[leaf_index]['received'] = True
-                        self.mk.completed_merkle[leaf_index]['from_robot'] = neighbor.ID
-                        
     def current_goal_callback(self, current_goal):
         self.current_goal_info = current_goal
 
@@ -138,19 +134,13 @@ class Controller:
                 self.current_goal_status_id = -1
             else:
                 self.current_goal_status_id = self.current_goal_status.status_list[0].status
-    
+
     def goal_achieved_callback(self, goalAchieved):
         self.goalAchieved = goalAchieved.data
-        
+
     def pose_callback(self, pose):
         self.pose = pose
 
-    def pucks_callback(self, puckList):
-        self.puckList = puckList
-     
-    def ground_callback(self, GroundSensorPack):
-        self.GroundSensorPack = GroundSensorPack
-        
     def prox_callback(self, proxList):
         self.time += 1
         # Find the closest obstacle (other robot or wall).
@@ -164,20 +154,11 @@ class Controller:
                 closestObs = prox
                 highestValue = prox.value
 
-        # Find the closest puck
-        closestPuck = None
-        closestRange = float('inf')
-        if self.puckList != None:
-            for puck in self.puckList.pucks:
-                if puck.range < closestRange:
-                    closestPuck = puck
-                    closestRange = puck.range
-                    
         self.state_transitions(closestObs,closestPuck)
         self.state_actions(closestObs,closestPuck)
 
     # State transitions
-    def state_transitions(self, closestObs, closestPuck):                    
+    def state_transitions(self, closestObs, currentCellColor):
         if self.state == "AVOID":
             # Only leave this state upon timeout.
             if self.time - self.stateStartTime > random.randint(10,25):
@@ -194,9 +175,9 @@ class Controller:
         elif self.state == "WANDER":
             if closestObs != None:
                 self.transition("AVOID")
-            elif closestPuck != None:
-                if(self.checkPuck(closestPuck)):
-                    if(not self.isPuckAtTarget(closestPuck)):
+            elif currentCellColor != None:
+                if(self.checkColor(currentCellColor)):
+                    if(not self.isColorAtTarget(currentCellColor)):
                         self.transition("HANDLE")
             else:
                 pass
@@ -209,7 +190,7 @@ class Controller:
             die("Error: Invalid state")
 
     # State actions
-    def state_actions(self,closestObs,closestPuck):
+    def state_actions(self,closestObs,currentCellColor):
         twist = None
 
         if self.state == "AVOID":
@@ -220,29 +201,29 @@ class Controller:
 
         elif self.state == "HANDLE":
             if (self.CurrentRGBColor == None):
-                if closestPuck != None:
-                    if (self.checkPuck(closestPuck)):
-                        if closestPuck.range >= self.grabbingDistancePuckThreshold:
+                if currentCellColor != None:
+                    if (self.checkColor(currentCellColor)):
+                        if currentCellColor.range >= self.grabbingDistancePuckThreshold:
                             twist = self.twistTowardsThing(closestPuck)
                         else:
-                            twist = self.alignWithPuck(closestPuck,self.alignmentThreshold)
-                            if math.fabs(closestPuck.angle) < self.alignmentThreshold:
-                                self.grabPuck(closestPuck)
+                            twist = self.alignWithColor(currentCellColor,self.alignmentThreshold)
+                            if math.fabs(currentCellColor.angle) < self.alignmentThreshold:
+                                self.grabPuck(currentCellColor)
                                 self.goToGoal()
                     else:
                         self.transition("WANDER")
                 else:
                     self.transition("WANDER")
-                    
+
         elif self.state == "LEAVE_PUCK":
-            self.markPuckAsCompleted()
+            self.markColorAsCompleted()
             self.goalAchieved = False
-            self.releasePuck()
+            self.releaseColor()
             twist = self.twistTowardsThing(closestPuck,True)
-            
+
         elif self.state == "WANDER":
             if(self.isRobotAtTarget()):
-                if(closestPuck != None):
+                if(currentCellColor != None):
                     twist = self.twistAway()
                 else:
                     twist = self.turnRobot()
@@ -258,22 +239,6 @@ class Controller:
     def transition(self, newState):
         self.state = newState
         self.stateStartTime = self.time
-
-    def alignWithPuck(self, closestPuck, alignmentThreshold):
-        v = 0
-        w = 0
-        
-        if closestPuck.angle < -alignmentThreshold:
-            # Turn right
-            w = -self.MAX_ROTATION_SPEED * 0.1
-        elif closestPuck.angle > alignmentThreshold:
-            # Turn left
-            w = self.MAX_ROTATION_SPEED * 0.1
-             
-        twist = Twist()
-        twist.linear.x = v
-        twist.angular.z = w
-        return twist
 
     def twistTowardsThing(self, thing, backwards=False):
         v = 0
@@ -300,7 +265,7 @@ class Controller:
     def twistAway(self):
         twist = Twist()
         twist.linear.x = -self.MAX_FORWARD_SPEED
-        twist.angular.z = self.MAX_ROTATION_SPEED 
+        twist.angular.z = self.MAX_ROTATION_SPEED
         return twist
 
     def twistRandom(self):
@@ -327,9 +292,9 @@ class Controller:
         twist.angular.z = 0
         return twist
 
-    def goToGoal(self):      
-        self.goToPosition(self.goal)    
-          
+    def goToGoal(self):
+        self.goToPosition(self.goal)
+
     def goToRandomPosition(self):
         goal = PoseStamped()
         goal.header.frame_id = "map"
@@ -338,7 +303,7 @@ class Controller:
         goal.pose.position.x = self.random_pose.position.x
         goal.pose.position.y = self.random_pose.position.y
         goal.pose.orientation.w = 0
-        self.cmdGoToPub.publish(goal)    
+        self.cmdGoToPub.publish(goal)
 
     def goToPosition(self, pose):
         goal = PoseStamped()
@@ -348,50 +313,55 @@ class Controller:
         goal.pose.position.x = pose.position.x
         goal.pose.position.y = pose.position.y
         goal.pose.orientation.w = pose.orientation.w
-        self.cmdGoToPub.publish(goal)    
+        self.cmdGoToPub.publish(goal)
 
-    def CancelGoal(self):      
+    def CancelGoal(self):
         goal = GoalID()
         goal.id = self.current_goal_info.goal_id.id
         goal.stamp = rospy.Time(0,0)
         self.cmdCancelGoalPub.publish(goal)
         self.previous_state = True
 
-    def grabPuck(self, puck):
-        self.CurrentRGBColor = GetPuckColorBasedOnType(puck)        
+    def grabColor(self, color):
+        self.CurrentRGBColor = GetPuckColorBasedOnType(color)
         self.cmdRGBLedsPub.publish(self.CurrentRGBColor)
-        
-    def releasePuck(self):
+
+    def releaseColor(self):
         self.CurrentRGBColor = None
         self.cmdRGBLedsPub.publish("off")
 
-    def checkPuck(self, Puck):
-        puck_color = GetPuckColorBasedOnType(Puck)        
-        puck_index = Puck.type - 1
-        return self.mk.check(puck_color, puck_index) 
+    def checkColor(self, color):
+        for index in xrange(self.mk.get_number_of_leafs()):
+            self.leaf_index = index
+            sensor_input = color
+            action = 'HANDLE'
+            if(self.mk.check(self.mk.generate_hash(action), self.mk.generate_hash(sensor_input), self.leaf_index)):
+                return True
 
     def publishCompletedMerkleTree(self):
         CompletedMerkleTree = MerkleLeafList()
+        CompletedMerkleTree.header.stamp = rospy.Time.now()
         CompletedMerkleTree.n = len(self.mk.completed_merkle)
 
         for leaf_index in xrange(CompletedMerkleTree.n):
             leaf = Leaf()
             leaf.ID = self.mk.completed_merkle[leaf_index]['id']
             leaf.completed = self.mk.completed_merkle[leaf_index]['completed']
-            leaf.hash = self.mk.completed_merkle[leaf_index]['hash']
+            leaf.hash_action = self.mk.completed_merkle[leaf_index]['hash_action']
+            leaf.hash_input = self.mk.completed_merkle[leaf_index]['hash_input']
             leaf.received = self.mk.completed_merkle[leaf_index]['received']
             leaf.from_robot = self.mk.completed_merkle[leaf_index]['from_robot']
             CompletedMerkleTree.leafs.append(leaf)
-            
+
         self.merkleCompletedPub.publish(CompletedMerkleTree)
-    
-    def markPuckAsCompleted(self):
-        puck_index = GetPuckTypeBasedOnColor(self.CurrentRGBColor) - 1
-        self.mk.complete_leaf(puck_index)
+
+    def markColorAsCompleted(self):
+        color_index = GetPuckTypeBasedOnColor(self.CurrentRGBColor) - 1
+        self.mk.complete_leaf(color_index)
 
     def isMerkleTreeCompleted(self):
         return self.mk.is_complete_merkle_done()
-    
+
     def isRobotAtTarget(self):
         if (self.GroundSensorPack.Left.value == 0 and\
             self.GroundSensorPack.Center.value == 0 and\
@@ -399,7 +369,7 @@ class Controller:
             return True
         else:
             return False
-        
+
     def isPuckAtTarget(self, Puck):
         X,Y,Z = quaternion_to_euler_angle(self.pose)
         theta = math.radians(Z) + Puck.angle
